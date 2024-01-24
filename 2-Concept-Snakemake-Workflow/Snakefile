@@ -1,0 +1,81 @@
+# This workflow conceptually creates the steps involved in 
+# - Downloading a genome and 4 RNA-seq libraries
+# - QC processing
+# - Mapping
+# - Gene expression quantification
+
+# For the purpose of the illustration, this workflow only creates empty files
+xs = ['sample1', 'sample2', 'sample3', 'sample4']
+
+
+rule download_raw_library:
+    output:
+        'raw-data/{sample}.fastq.gz'
+    shell:
+        """
+        touch {output}
+        """
+
+
+rule download_genome:
+    output:
+        'genome.fna.gz',
+        'genome.gff.gz'
+    shell:
+        """
+        touch {output}
+        """
+
+rule qc_cleaning:
+    input:
+        'raw-data/{sample}.fastq.gz'
+    output:
+        'clean-data/{sample}.fastq.gz'
+    shell:
+        """
+        touch {output}
+        """
+
+
+rule genome_index:
+    input:
+        'genome.fna.gz'
+    output:
+        'index'
+    shell:
+        """
+        touch {output}
+        """
+
+
+rule read_mapping:
+    input:
+        'clean-data/{sample}.fastq.gz'
+    output:
+        'mapping/{sample}.bam'
+    shell:
+        """
+        touch {output}
+        """
+
+
+rule count_expression:
+    input:
+        genome = 'index',
+        mapping = expand('mapping/{sample}.bam', sample = xs)
+    output:
+        'matrix.txt'
+    shell:
+        """
+        echo "I am the named genome input: {input.genome}"
+        echo "We are the input mappings: {input.mapping}"
+        echo "I am the first mapping: {input.mapping[0]}"
+        touch {output}
+        """
+
+
+rule clear:
+    shell:
+        """
+        rm -rf clean-data index mapping raw-data genome*.gz matrix.txt
+        """

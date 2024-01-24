@@ -1,0 +1,193 @@
+# Example Snakemake RNA-seq reads processing pipeline
+# Author: Adrian Sven Geissler
+#
+# The implemented steps are
+# - Trimming and adapter removal with fastp
+# - Alignment with STAR against chromosome 3
+# - Feature count of gene expression
+#
+# All rules below are adapted from the wrappers documentation
+# https://snakemake-wrappers.readthedocs.io/en/stable/
+
+
+# paired-end RNA-seq libraries from "the airways" dataset
+# https://pubmed.ncbi.nlm.nih.gov/24926665
+# List of librarie identifiers
+dataset = ["SRR1039508", "SRR1039509", "SRR1039512", "SRR1039513"]
+# With these corresponding files:
+# $ ls raw-data
+# SRR1039508_1.fastq.gz SRR1039509_1.fastq.gz SRR1039512_1.fastq.gz SRR1039513_1.fastq.gz
+# SRR1039508_2.fastq.gz SRR1039509_2.fastq.gz SRR1039512_2.fastq.gz SRR1039513_2.fastq.gz
+#
+# The annotation and genomic sequence of the human chromosome 3 is from
+# Gencode version 44, see: https://www.gencodegenes.org/human/
+
+################################################################################
+################################################################################
+
+# pre-process reads with fastp
+# https://www.ncbi.nlm.nih.gov/pmc/articles/pmc6129281/
+# please refer to handbook (https://github.com/opengene/fastp) for details on the steps
+
+rule qc_cleaning:
+    input:
+        sample = ["raw-data/{sample}_1.fastq.gz", "raw-data/{sample}_2.fastq.gz"]
+    output:
+        trimmed = ["clean-data/{sample}_1.fastq.gz", "clean-data/{sample}_2.fastq.gz"],
+        html = "clean-data/{sample}.html",
+        json  = "clean-data/{sample}-fastp.json"
+    log:
+        "logs/fastp/{sample}.log"
+    params:
+        # parameters for processing
+        extra=" ".join([
+            # average quality score of reads requirement
+            "--average_qual=20",
+            # at most 10% of read positions have score below 20
+            "--qualified_quality_phred=20",
+            "--unqualified_percent_limit=10",
+            # ensure a minimal read length
+            "--length_required=40",
+            #  illumina truseq adapters
+            "--adapter_sequence=AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+            "--adapter_sequence_r2=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"
+        ])
+    threads: 4
+    wrapper:
+        "v3.3.5/bio/fastp"
+
+
+################################################################################
+################################################################################
+
+# index the chromosome, but unzip is required by the STAR tool
+rule unzip_genome:
+    input:
+        "{genome}.fna.gz"
+    output:
+        temp("{genome}.fna")
+    shell:
+        """
+        gunzip -c {input} > {output}
+        """
+
+
+rule genome_index:
+    input:
+        fasta  ="{genome}.fna"
+    output:
+        directory("{genome}_index"),
+    threads: 4
+    log:
+        "logs/star_index_{genome}.log",
+    wrapper:
+        "v3.3.5/bio/star/index"
+
+
+# map cleaned reads against the chromosome 3
+rule read_mapping:
+    input:
+        fq1 = "clean-data/{sample}_1.fastq.gz",
+        fq2 = "clean-data/{sample}_2.fastq.gz",
+        idx = "chr3_index",
+    output:
+        aln = "star/{sample}.sam",
+        log = "star/{sample}.Log.out",
+        log_final = "star/{sample}.Log.final.out",
+        sj  ="star/{sample}.sj.out.tab",
+    log:
+        "logs/star/{sample}.log"
+    threads: 4
+    wrapper:
+        "v3.3.5/bio/star/align"
+
+
+
+
+
+################################################################################
+################################################################################
+
+# quantify gene expression
+rule count_expression:
+    input:
+        samples = "star/{sample}.sam",
+        annotation = "chr3.gff",
+    output:
+        multiext(
+            "featureCount/{sample}",
+            ".featureCounts",
+            ".featureCounts.summary",
+        ),
+    threads: 2
+    params:
+        # strandness of the library 
+        # 0: unstranded (this is the case for the airway dataset)
+        # 1: stranded
+        # 2: reversely stranded)
+        strand = 0,
+        # Data is:
+        # (p)aired, (B)oth ends,  check (P)airs
+        # require 50% of read length overlap with annotation
+        # count to gene with largest overlap
+        extra =  "--fracOverlap 0.5 --largestOverlap -p -B -P -t gene -F GFF"
+
+    log:
+        "logs/{sample}.log",
+    wrapper:
+        "v3.3.5/bio/subread/featurecounts"
+
+################################################################################
+################################################################################
+
+# collect featureCounts and build a single count matrix
+
+rule build_matrix:
+    input:
+        expand("featureCount/{sample}.featureCounts",
+               sample = dataset)
+    output:
+        'gene-expression-matrix.tsv'
+    shell:
+        """
+        tmp=$(mktemp -d)
+        # Extract the gene names etc
+		# (tail excludes first line [start display from 2nd line],
+		#  then cut extracts the first 6 columns)
+        tail +2 {input[0]} | cut -f 1-6 > $tmp/00_annot
+        # for each file extract only the counts
+        for i in {input} ; do
+			# the sample name from the filename without the file extension
+            bsn=$(basename $i .featureCounts)
+			# save sample name in a temporary file
+            echo $bsn > $tmp/$bsn
+			# exclude first 2 rows and only extract the last column
+			# append expression counts to the temporary file
+            tail +3 $i | cut -f 7 >> $tmp/$bsn
+        done
+        # 'paste' columns together
+		# the '00_annot' file fill come first, due to the alpha-numeric sotring
+        paste $tmp/* > {output}
+        rm -rf $tmp
+        """
+
+################################################################################
+################################################################################
+
+# report on the quantification
+rule report:
+    input:
+        # the pre-processing
+        expand("clean-data/{sample}-fastp.json", sample = dataset),
+        # from the read mapping
+        expand("star/{sample}.Log.final.out", sample = dataset),
+        # the epression quantification
+        expand("featureCount/{sample}.featureCounts.summary",
+               sample = dataset)
+    output:
+        "report/multiqc.html",
+        directory("report/multiqc_data"),
+    log:
+        "logs/multiqc.log",
+    wrapper:
+        "v3.3.5/bio/multiqc"
