@@ -1,12 +1,17 @@
-
 # Snakemake Transcriptomics Intro
 
 
-This repository contains a small exemplary Snakemake
-workflow for processing a transcriptomic dataset.
-For demonstration purposes, this workflow contains only the read cleaning,
-read mapping, and expression quantification steps for a small tutorial dataset.
-The illustration for the workflow steps are:
+This readme file contains:
+
+- Instructions on the software installation
+- Short introduction into the a concept of workflow with mockup scripts that generate empty files
+- A tutorial workflow on a small biological dataset
+
+The tutorial dataset is designed such that the entire workflow should be able to run on a recent consumer-grade notebook in under $15$ minutes.
+
+For demonstration purposes, this tutorial workflow contains only the read cleaning,
+read mapping, and expression quantification steps.
+The general structure and dependencies between the workflow steps are:
 
 
 ```mermaid
@@ -27,6 +32,7 @@ The illustration for the workflow steps are:
       Xgff-->Xx;
       Xx-->Xfun;
 ```
+
 
 ## Installation
 
